@@ -1,0 +1,209 @@
+
+## Analise de Series temporal do fluxo do rio Nilo
+
+
+library(forecast)
+library(stats)
+library(tseries)
+library(pracma)
+library(minpack.lm)
+library(lmtest)
+library(MASS)
+library(stepR)
+
+bct = function(x){
+  l = boxcox(x~1)
+  l = l$x[which.max(l$y)]
+  x = (x^l-1)/l
+  return(x)
+}
+
+## Ler dados
+
+data("Nile")
+print("Nile")
+
+pdf('fig0.pdf')
+plot(t,x,ylab=expression(x[t]),type='l')
+dev.off()
+
+## Organizacao dos Dados
+
+data("Nile")
+x = Nile
+x = as.vector(x)
+s1 = shapiro.test(x)
+
+## Transformacao
+
+k = 0
+
+if(k==1){
+  xt = bct(x)
+  s2 = shapiro.test(xt)
+  pdf('transformacao.pdf',width=9,height=4)
+  par(mfrow=c(1,2))
+  hist(x,xlab=paste('Shapiro-Wilk Test (p=',signif(s1$p.value,2),')',sep=''),
+                    ylab=expression(x[t]),main=NA)
+  hist(xt,xlab=paste('Shapiro-Wilk Test (p=',signif(s2$p.value,2),')',sep=''),
+                    ylab=expression(bar(x[t])),main=NA)
+  dev.off()
+}
+
+n = length(x)
+t = 1:n
+
+pdf('fig1.pdf')
+plot(t,x,ylab=expression(X[t]),type='l')
+dev.off()
+
+## -----------------------------
+## Parte Deterministica do Sinal
+## -----------------------------
+
+k = 0
+
+if(k==0){
+  ## Tendencia
+  t1 = lm(x~t)
+  t2 = nls(x~a*t^2+b*t+c,start=list(a=0.1,b=1,c=0.001))
+  t3 = nls(x~a*exp(b*t)+c,start=list(a=1,b=0.01,c=0))
+  t4 = nls(x~a*t^3+b*t^2+c*t+d,start=list(a=0.1,b=1,c=0.001,d=0))
+  at1 = AIC(t1)
+  at2 = AIC(t2)
+  at3 = AIC(t3)
+  at4 = AIC(t4)
+  x2 = x - predict(t4)
+}
+
+if(k==1){
+  ## Intervencao
+  x = as.vector(Nile)
+  sf = stepFit(x, x = t, alpha = 0.5, jumpint = TRUE, confband = TRUE)
+  ind = sf$leftEnd[2]
+  v = sf$value
+  mt = (t<ind)*v[1] +  (t>=ind)*v[2]
+  x2 = x - mt
+}
+
+s1 = adf.test(x,k=12)        ## teste de estacionaridade do sinal original
+s2 = adf.test(x2,k=12)       ## teste de estacionaridade do sinal sem o trend
+
+pdf('detrend.pdf')
+plot(t,x,type='l')
+lines(t,predict(t4),col='red',lwd=2)
+dev.off()
+
+## Sazonalidade
+
+st = x2
+sp = spectrum(st)
+fp = findpeaks(sp$spec,threshold = 1, npeaks=7)
+ind = fp[,2]
+fp = sp$freq[ind]
+plot(sp$freq,sp$spec,type='l')
+points(sp$freq[ind],sp$spec[ind],pch=19,col='red',lwd=2)
+
+a0 = (max(st)-min(st))/2
+c0 = (max(st)+min(st))/2
+sm1 = nls(st~a*sin(b*t*2*pi+d)+c,start=list(a=a0,b=fp[5],c=c0,d=1))       ## Seasonal Model 1
+plot(st,type='l')
+lines(predict(sm1),col='red')
+x3 = x2 - predict(sm1)
+plot(x3,type='l')
+
+st = x3
+a0 = (max(st)-min(st))/2
+c0 = (max(st)+min(st))/2
+sm2 = nls(st~a*sin(b*t*2*pi+d)+c,start=list(a=a0,b=fp[1],c=c0,d=1))       ## Seasonal Model 2
+plot(st,type='l')
+lines(predict(sm2),col='red')
+x4 = x3 - predict(sm2)
+plot(x4,type='l')
+
+st = x4
+a0 = (max(st)-min(st))/2
+c0 = (max(st)+min(st))/2
+sm3 = nls(st~a*sin(b*t*2*pi+d)+c,start=list(a=a0,b=fp[7],c=c0,d=1))       ## Seasonal Model 3
+plot(st,type='l')
+lines(predict(sm3),col='red')
+x5 = x4 - predict(sm3)
+plot(x5,type='l')
+
+st = x5
+a0 = (max(st)-min(st))/2
+c0 = (max(st)+min(st))/2
+sm4 = nlsLM(st~a*abs(sin(b*t*2*pi+d))+c,start=list(a=a0,b=0.008,c=c0,d=1))## Seasonal Model 4
+plot(st,type='l')
+lines(predict(sm4),col='red')
+x6 = x5 - predict(sm4)
+plot(x6,type='l')
+
+## --------------------------
+## Parte Estocastica do Sinal
+## --------------------------
+
+acf(x6)
+
+me1 = auto.arima(x, stationary = F,seasonal = T)
+me2 = auto.arima(x6, stationary = T,seasonal = F)
+
+AIC(me1)
+AIC(me2)
+
+pdf('decomposicao.pdf',width=10,height=16)
+par(mfrow=c(7,1))
+plot(t,predict(t4),type='l')
+plot(t,predict(sm1),type='l')
+plot(t,predict(sm2),type='l')
+plot(t,predict(sm3),type='l')
+plot(t,predict(sm4),type='l')
+plot(t,predict(me2),type='l')
+plot(t,predict(t4),type='l')
+dev.off()
+
+## ------------------
+## Analise de Residuo
+## ------------------
+
+res = as.vector(me2$residuals)
+sw = shapiro.test(res)
+dw = dwtest(res)
+
+pdf('residuo.pdf',width=8,height=4)
+par(mfrow=c(1,2))
+hist(res,main=NA,xlab=paste('Shapiro-Wilk Test (p = ',round(sw$p.value,2),')',sep=''))
+acf(res,lag.max = 18,main=NA)
+dev.off()
+
+## --------
+## --------
+## Previsao
+## --------
+## --------
+
+nt = length(x)
+cp = 24
+ti = (nt+1)
+tf = (nt+cp)
+tp = ti:tf
+
+p1 = predict(t4,newdata = list(t=tp))
+p2 = predict(sm1,newdata = list(t=tp))
+p3 = predict(sm2,newdata = list(t=tp))
+p4 = predict(sm3,newdata = list(t=tp))
+p5 = predict(sm4,newdata = list(t=tp))
+
+pd = p1 + p2 + p3 + p4 + p5
+pe = forecast(me2,cp)
+
+pm = pe$mean
+pl = pe$lower[,2] + pd + pm
+ph = pe$upper[,2] + pd + pm
+ymax = max(pl,ph,x)
+ymin = min(pl,ph,x)
+
+plot(t,x,type='l',ylim=c(ymin,ymax))
+lines(tp,pd+pm,col='red',lwd=2)
+lines(tp,ph,col='red',lty=2)
+lines(tp,pl,col='red',lty=2)
